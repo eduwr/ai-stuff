@@ -15,14 +15,14 @@ from langchain_groq import ChatGroq
 from langchain_tavily import TavilySearch
 from pydantic import BaseModel, Field
 from typing import List
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 
 
 
 class Source(BaseModel):
     """Schema for a source used by the agent"""
 
-    urd:str = Field(description="The URL of the source")
+    url:str = Field(description="The URL of the source")
 
 class AgentResponse(BaseModel):
     """Schema for the agent response"""
@@ -31,7 +31,7 @@ class AgentResponse(BaseModel):
     sources: List[Source] = Field(default_factory=list, description="List of sources used to get the answer")
 
 
-llm = ChatGroq(model="openai/gpt-oss-120b")
+llm = ChatOpenAI(model="gpt-5.4-mini")
 # llm = ChatGoogleGenerativeAI(
 #     model="gemini-3.1-pro-preview",
 # )

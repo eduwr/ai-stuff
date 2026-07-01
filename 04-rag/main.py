@@ -1,105 +1,143 @@
+from operator import itemgetter
+import os
+
 from dotenv import load_dotenv
 
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnablePassthrough
+from langchain_core.messages import HumanMessage
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_pinecone import PineconeVectorStore
 
 load_dotenv()
 
-from langchain.chat_models import init_chat_model
-from langchain.tools import tool
+print("Initializing components...")
 
-from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
-from langsmith import traceable
+MODEL = "gpt-5.2" # just for testing, we will be using the default gpt 3.5 to make 
 
-MAX_ITERATIONS = 10
-MODEL = "qwen3:1.7b"
+embeddings = OpenAIEmbeddings(openai_api_key=os.environ.get("OPENAI_API_KEY"))
+llm = ChatOpenAI()
+vectorstore = PineconeVectorStore(
+    index_name=os.environ.get("INDEX_NAME"), embedding=embeddings
+)
 
-# --- Tools (LangChain @tool decorator) ---
+retriever = vectorstore.as_retriever(
+    search_kwargs={"k": 3}
+)
 
-@tool
-def get_product_price(product: str) -> float:
-    """Look up the price of a product in the catalog"""
-    print(f".   >> Executing get_product_price(product='{product}')")
-    prices = {"laptop": 1299.99, "headphones": 149.95, "keyboard": 89.50}
-    return prices.get(product, 0)
-
-@tool
-def apply_discount(price: float, discount_tier: str) -> float:
-    """Apply a discount tier to a price and return the final price.
-    Available tiers: bronze, silver, gold."""
-    print(f"   >> Executing apply_discount(price={price}, discount_tier='{discount_tier}')")
-    discount_percentages = {"bronze": 5, "silver": 12, "gold": 23}
-    discount = discount_percentages.get(discount_tier, 0)
-    return round(price * (1 - discount / 100), 2)
-
-@traceable(name="LangChain Agent Loop")
-def run_agent(question: str):
-    tools = [get_product_price, apply_discount]
-    tools_dict = {t.name: t for t in tools}
+prompt_template = ChatPromptTemplate.from_template(
+    """Answer the question based only on the following context:
     
-    llm = init_chat_model(f"ollama:{MODEL}", temperature=0, reasoning=True)
-    llm_with_tools = llm.bind_tools(tools)
+    {context}
 
-    print(f"Question: {question}")
-    print("=" * 60)
+    Question: {question}
 
-    messages = [
-        SystemMessage(content=(
-            "You are a helpful shopping assistant. "
-            "You have access to a product catalog tool "
-            "and a discount tool. \n\n"
-            "STRICT RULES - you must follow these exactly:\n"
-            "1. NEVER guess or assume any product price. "
-            "You MUST call get_product_price first to get the real price.\n"
-            "2. Only call apply_discount AFTER you have received "
-            "a price from get_product_price. Pass the exact price "
-            "returned by get_product_price - do NOT pass a made-up number.\n"
-        )),
-        HumanMessage(content=question)
-    ]
+    Provide a detailed answer:"""
+)
 
+def format_docs(docs):
+    """Format retrieved documents into a single string."""
+    return "\n\n".join(doc.page_content for doc in docs)
 
-    for iteration in range(1, MAX_ITERATIONS + 1):
-        print(f"--- Iteration {iteration} ---")
-        ai_message = llm_with_tools.invoke(messages)
+def retrieval_chain_without_lcel(query: str):
+    """
+    Simple retrieval chain without LCEL.
+    Manually retrieves documents, formats them, and generates a response.
 
-        tool_calls = ai_message.tool_calls
+    Limitations:
+    - Manual step-by-step execution
+    - No built-in streaming support
+    - No async support without additional code
+    - Harder to compose with other chains
+    - More verbose and error-prone
+    """
+    # Step 1: Retrieve relevant documents
+    docs = retriever.invoke(query)
 
-        # if not tool calls this is the final answer
-        if not tool_calls:
-            print(f"\nFinal Answer: {ai_message.content}")
-            return ai_message.content
-        
-        # Process only the FIRST tool call for convenience
-        tool_call = tool_calls[0]
-        tool_name = tool_call.get("name")
-        tool_args = tool_call.get("args", {})
-        tool_call_id = tool_call.get("id")
+    # Step 2: Format documents into context string
+    context = format_docs(docs)
 
-        print(f"   [Tool Selected] {tool_name} with args: {tool_args}")
+    # Step 3: Format the prompt with context and question
+    messages = prompt_template.format_messages(context=context, question=query)
 
-        tool_to_use = tools_dict.get(tool_name)
-        if (tool_to_use) is None:
-            raise ValueError(f"Tool '{tool_name}' not found")
+    # Step 4: Invoke LLM with the formatted messages
+    response = llm.invoke(messages)
 
-        observation = tool_to_use.invoke(tool_args)
+    # Step 5: Return the content
+    return response.content
 
-        print(f"   [Tool Result] {observation}")
+# ========================================================================
+# Implementation 2: WITH LCEL (Langchain Expression Language) - BETTER APPROACH
+# ========================================================================
+def create_retrieval_chain_with_lcel():
+    """
+    Creates a retrieval chain using LCEL (Langchain Expression Language)
+    Returns a chain that can be invoked with { question: "..." }
 
-        messages.append(ai_message)
-        messages.append(
-            ToolMessage(content=str(observation), tool_call_id=tool_call_id)
+    Advantages over non-LCEL approach:
+    - Declarative and composable: Easy to chain operations with pipe operator (|)
+    - Built-in streaming: chain.stream() works out of the box
+    - Built-in async: chain.ainvoke() and chain.astream() available
+    - Batch processing: chain.batch() for multiple inputs
+    - Type safety: Better integration with LangChain's type system
+    - Less code: More concise and readable
+    - Reusable: Chain can be saved, shared, and composed with other chains
+    - Better debugging: LangChain provides better observability tools
+
+    """
+    retrieval_chain = (
+        RunnablePassthrough.assign(
+            context=itemgetter("question") | retriever | format_docs
         )
-    
-    print("ERROR: Max iterations reached without a final answer")
-    return None
-
-                                  
-
-
-def main():
-    print("Hello LangChain Agent (.bind_tools)!")
-    print()
-    result = run_agent("What is the price of a laptop after applying a gold discount?")
+        | prompt_template
+        | llm
+        | StrOutputParser()
+    )
+    return retrieval_chain
 
 
 if __name__ == "__main__":
-    main()
+    print("Retrieving...")
+
+    # Query
+    query = "What is Pinecone in machine learning?"
+
+    # ===========================================================================
+    # Option 0: Raw LLM invocation (No RAG)
+    # ===========================================================================
+
+    print("\n" +  "=" * 70)
+    print("IMPLEMENTATION 0: Raw LLM Invocation (No RAG)")
+    print( "=" * 70)
+    result_raw = llm.invoke([HumanMessage(content=query)])
+    print(result_raw.content)
+
+    # ========================================================================
+    # Option 1: Use implementation WITHOUT LCEL
+    # ========================================================================
+    print("\n" + "=" * 70)
+    print("IMPLEMENTATION 1: Without LCEL")
+    print("=" * 70)
+    result_without_lcel = retrieval_chain_without_lcel(query)
+    print("\nAnswer:")
+    print(result_without_lcel)
+
+    # ========================================================================
+    # Option 2: Use implementation WITH LCEL (Better Approach)
+    # ========================================================================
+    print("\n" + "=" * 70)
+    print("IMPLEMENTATION 2: With LCEL - Better Approach")
+    print("=" * 70)
+    print("Why LCEL is better:")
+    print("- More concise and declarative")
+    print("- Built-in streaming: chain.stream()")
+    print("- Built-in async: chain.ainvoke()")
+    print("- Easy to compose with other chains")
+    print("- Better for production use")
+    print("=" * 70)
+
+    chain_with_lcel = create_retrieval_chain_with_lcel()
+    result_with_lcel = chain_with_lcel.invoke({"question": query})
+    print("\nAnswer:")
+    print(result_with_lcel)

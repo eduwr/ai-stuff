@@ -37,8 +37,26 @@ tavily_extract = TavilyExtract()
 tavily_map = TavilyMap(max_depth=5, max_beadth=20, max_pages=1000)
 tavily_craw = TavilyCrawl()
 
+URL = "https://python.langchain.com/"
 async def main():
     """Main Async function to orchestrate the entire process"""
+    log_header("DOCUMENTATION INGESTION PIPELINE")
+
+    log_info(f"🔍 Tavily Crawl: Starting to Crawl documentation from {URL}", Colors.PURPLE)
+
+    res = tavily_craw.invoke(
+     {
+         "max_depth": 5,
+         "url": URL,
+         "extract_depth": "advanced",
+         "instructions": "content on ai agents"
+     }
+    )
+
+    all_docs = [Document(page_content=result["raw_content"], metadata={"source": result['url']}) for result in res["results"]]
+    log_success(
+       f"🔍 Tavily Crawl: Successfully crawled {len(all_docs)} URLs from {URL}"
+    )
 
 
 

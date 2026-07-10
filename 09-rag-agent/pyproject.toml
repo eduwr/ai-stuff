@@ -1,0 +1,21 @@
+[project]
+name = "09-rag-agent"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "beautifulsoup4>=4.15.0",
+    "black>=25.11.0",
+    "chromadb>=1.5.9",
+    "isort>=6.1.0",
+    "langchain>=0.3.30",
+    "langchain-chroma>=0.2.6",
+    "langchain-community>=0.3.31",
+    "langchain-openai>=0.3.35",
+    "langchain-tavily>=0.2.11",
+    "langchain-text-splitters>=0.3.11",
+    "langgraph>=0.6.11",
+    "pytest>=8.4.2",
+    "python-dotenv>=1.2.1",
+]

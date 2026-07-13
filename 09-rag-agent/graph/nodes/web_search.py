@@ -19,7 +19,7 @@ def web_search(state: GraphState) -> GraphState:
 
     tavily_results = web_search_tool.invoke({"query": question})
     joined_tavily_results = "\n".join(
-        [tavily_result["content"] for tavily_result in tavily_results]
+        [tavily_result["content"] for tavily_result in tavily_results["results"]]
     )
     web_results = Document(page_content=joined_tavily_results)
     if documents is not None:
